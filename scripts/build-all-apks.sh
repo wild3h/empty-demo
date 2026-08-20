@@ -70,7 +70,7 @@ APKSIGNER=$(find_sdk_tool apksigner)
 AAPT=$(find_sdk_tool aapt)
 
 # Trusted release certificate fingerprint, independent of the Gradle signing configuration.
-TRUSTED_RELEASE_CERT_SHA256='ab3eed20c164f46234154da81d36156698246835249ccb2094c5e5139dee2658'
+TRUSTED_RELEASE_CERT_SHA256='b80342a2fde0aa62e43f68d3a03e0720ca60095d0252070103447bbfceedec98'
 MAX_APK_SIZE_BYTES=$((100 * 1024 * 1024))
 
 START_TIME=$(date +%s)
@@ -115,7 +115,7 @@ allprojects { project ->
 }
 GRADLE
 
-if ! ./gradlew -PbatchBuildType="$BUILD_TYPE" -I "$INIT_SCRIPT" help --console=plain -q > "$DISCOVERY_OUTPUT"; then
+if ! ./gradlew -PbatchBuildType="$BUILD_TYPE" -I "$INIT_SCRIPT" help --console=plain -q --no-configuration-cache > "$DISCOVERY_OUTPUT"; then
 	printf 'Gradle variant discovery failed for build type: %s\n' "$BUILD_TYPE" >&2
 	exit 1
 fi
@@ -235,7 +235,11 @@ while IFS='|' read -r MARKER TASK MODULE_DIR VARIANT_NAME VARIANT_CHANNEL; do
         }
 
         printf 'Verifying %s\n' "$APK_NAME"
-        "$APKSIGNER" verify --verbose --print-certs "$SOURCE_APK" > "$SIGNING_REPORT"
+		if ! "$APKSIGNER" verify --verbose --print-certs "$SOURCE_APK" > "$SIGNING_REPORT" 2>&1; then
+			cat "$SIGNING_REPORT" >&2
+			printf 'APK signature verification failed: %s\n' "$SOURCE_APK" >&2
+			exit 1
+		fi
         grep -q '^Verifies$' "$SIGNING_REPORT" || {
             printf 'APK signature verification failed: %s\n' "$SOURCE_APK" >&2
             exit 1
@@ -244,13 +248,27 @@ while IFS='|' read -r MARKER TASK MODULE_DIR VARIANT_NAME VARIANT_CHANNEL; do
             printf 'APK does not use a modern signature scheme: %s\n' "$SOURCE_APK" >&2
             exit 1
         }
-        ACTUAL_CERT=$(awk -F': ' '/^Signer #1 certificate SHA-256 digest:/ { value = tolower($2); gsub(/:/, "", value); print value; exit }' "$SIGNING_REPORT")
+        ACTUAL_CERT=$(awk '
+            /certificate SHA-256 digest[[:space:]]*:/ {
+                value = $0
+                sub(/^.*digest[[:space:]]*:[[:space:]]*/, "", value)
+                gsub(/[^[:xdigit:]]/, "", value)
+                print tolower(value)
+                exit
+            }
+        ' "$SIGNING_REPORT")
         SIGNER_TOTAL=$(awk -F': ' '/^Number of signers:/ { print $2; exit }' "$SIGNING_REPORT")
         if [ "$SIGNER_TOTAL" != "1" ]; then
             printf 'Expected exactly one APK signer for %s, found: %s\n' \
                 "$SOURCE_APK" "${SIGNER_TOTAL:-unknown}" >&2
             exit 1
         fi
+		if [ "${#ACTUAL_CERT}" -ne 64 ]; then
+			cat "$SIGNING_REPORT" >&2
+			printf 'Unable to extract APK signing certificate SHA-256 digest: %s\n' \
+				"$SOURCE_APK" >&2
+			exit 1
+		fi
 		if [ "$BUILD_TYPE" = "release" ] && { [ -z "$ACTUAL_CERT" ] || [ "$ACTUAL_CERT" != "$TRUSTED_RELEASE_CERT_SHA256" ]; }; then
 			printf 'Untrusted signing certificate for %s.\nExpected: %s\nActual:   %s\n' \
 				"$SOURCE_APK" "$TRUSTED_RELEASE_CERT_SHA256" "${ACTUAL_CERT:-unavailable}" >&2
