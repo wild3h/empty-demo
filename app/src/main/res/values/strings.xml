@@ -1,3 +1,8 @@
 <resources>
-    <string name="app_name">myball</string>
+    <string name="app_name">MyBall</string>
+    <string name="home_label">Demo</string>
+    <string name="home_title">MyBall</string>
+    <string name="home_subtitle">A simple home screen</string>
+    <string name="home_card_title">Demo is ready</string>
+    <string name="home_card_description">There are no actions or data on this page yet.</string>
 </resources>
